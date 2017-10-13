@@ -9,6 +9,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <sys/select.h>
 
 void server_static(int connfd, char *filename, int filesize)
 {
@@ -147,6 +148,12 @@ int main()
     struct sockaddr_in server_addr;
     struct sockaddr_in client_addr;
 
+    int nready;
+    int clientfd[1024];
+    fd_set read_set, ready_set;
+    int maxfd;
+    int maxi;
+
     if((listenfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
         return -1;
 
@@ -163,19 +170,75 @@ int main()
     if(listen(listenfd, 1) < 0)
         return -1;
 
+    maxi = -1;
+    int i;
+    for(i=0; i<1024; i++)
+        clientfd[i] = -1;
+    maxfd = listenfd;
+    FD_ZERO(&read_set);
+    FD_SET(listenfd, &read_set);
+
     while(1)
     {
         int client_size = sizeof(client_addr);
+
+        ready_set = read_set;
+        nready = select(maxfd+1, &ready_set, NULL, NULL, NULL);
+
         char buffer[1024];
+        memset(&buffer, 0, 1024);
 
-        connfd = accept(listenfd, (struct sockaddr *)&client_addr, &client_size);
+        if(FD_ISSET(listenfd, &ready_set))
+        {
+            connfd = accept(listenfd, (struct sockaddr *)&client_addr, &client_size);
+            if(connfd < 0)
+                exit(1);
 
-        if(connfd < 0)
-            exit(1);
+            //add client
+            nready--;
 
-        httpserver(connfd);
-        close(connfd);
+            int i;
+            for(i=0; i<1024; i++)
+            {
+                if(clientfd[i] < 0)
+                {
+                    clientfd[i] = connfd;
+                    FD_SET(connfd, &read_set);
+
+                    if(connfd > maxfd)
+                        maxfd = connfd;
+                    if(i > maxi)
+                        maxi = i;
+                    break;
+                }
+            }
+
+            if(i == 1024)
+            {
+                printf("add client error : Too many clients\n");
+                exit(1);
+            }
+        }
+
+        //check client
+        for(i=0; (i<=maxi) && (nready>0); i++)
+        {
+            connfd = clientfd[i];
+
+            if((connfd > 0) && (FD_ISSET(connfd, &ready_set)))
+            {
+                nready--;
+
+                read(connfd, buffer, 1024);
+                sleep(3);
+                write(connfd, buffer, 1024);
+
+                close(connfd);
+                FD_CLR(connfd, &read_set);
+                clientfd[i] = -1;
+            }
+        }
     }
-    
+
     exit(0);
 }
